@@ -1,0 +1,143 @@
+#!/usr/bin/env python
+
+import itertools
+import os
+import subprocess
+import sys
+import tempfile
+
+
+class Sox():
+    prog = 'sox'
+
+    def duration(self, fname):
+        cmd = [self.prog, '--info', '-D', fname]
+        #print ' '.join(cmd)
+        output = subprocess.check_output(cmd)
+        return float(output.strip())
+
+    def spectrogram(self, in_fname, out_fname='spectrogram.png', width=None, height=1025):
+        ## sox --help-effect spectrogram
+        ## Height should be `1 + n^2` for best performance
+        ## Width is audio file length in seconds
+        width = width or self.duration(in_fname)
+        remix_filter_cmd = ['remix', '1,2']
+        spectrogram_filter_cmd = ['spectrogram', '-x', str(width), '-y', str(height), '-l', '-m', '-r', '-o', out_fname]
+        cmd = [self.prog, in_fname, '-V1', '--null'] + remix_filter_cmd + spectrogram_filter_cmd
+        print 'Running:', ' '.join(cmd)
+        subprocess.check_output(cmd)
+
+
+def stderr(s):
+    sys.stderr.write(str(s) + '\n')
+
+
+def to_time(i):
+    h = i / 3600
+    m = (i % 3600) / 60
+    s = i % 60
+    return '%2d:%02d:%02d' % (h, m, s) if h else '%5d:%02d' % (m, s)
+
+
+def mean(l):
+    return sum(l) / len(l) if len(l) else 0
+
+
+def median(l):
+    m, r = divmod(len(l), 2)
+    return sorted(l)[m] if r else sum(sorted(l)[m-1:m+1]) / 2
+
+
+def transpose(m):
+    return map(list, zip(*m))
+
+
+def safe_range(l, start, end):
+    left = [l[0] for _ in range(start, 0)]
+    right = [l[-1] for _ in range(len(l), end)]
+    return  left + l[start:end] + right
+
+
+def monochrome(l, threshold=60):
+    l_filtered = [x for x in l if x > threshold]
+    return 1 if mean(l_filtered) > threshold else 0
+
+
+def sliding_window(l, length, f=sum):
+    return [f(safe_range(l, i - length, i)) for i in range(len(l))]
+
+
+def transition_ranges(l, min_on=30, min_off=15, offset=0):
+    ranges = []
+    state = False
+    tmp = 0
+    for i, x in enumerate(l):
+        if x and not state and i - tmp >= min_off:
+            state = not state
+            tmp = i
+        elif not x and state and i - tmp >= min_on:
+            ranges.append((tmp - offset, i - offset))
+            state = not state
+            tmp = i
+    if state:  # Assume last range is open ended
+        ranges.append((tmp - offset, len(l)))
+    return ranges
+
+
+THRESHOLD, WINDOW_LENGTH = 70, 30
+MIN_ON, MIN_OFF = 60, 60
+
+def main(args):
+    if not args:
+        sys.exit('Usage: analyze <audiofile>')
+
+    ## Check dependencies
+    with open(os.devnull, 'w') as fh:
+        if subprocess.call(['which', Sox.prog], stdout=fh) != 0:
+            sys.exit('Dependency missing: sox. Run `{aptitude,brew} install sox`')
+
+    try:
+        import png
+    except ImportError:
+        sys.exit('Dependency missing: pypng. Run `pip install pypng`')
+
+
+    in_fname = sys.argv[1]
+    _, out_fname = tempfile.mkstemp(suffix='.png', prefix='sox_')
+
+    ## Create spectrogram
+    sox = Sox().spectrogram(in_fname, out_fname)
+
+    ## Read file
+    print 'Parsing spectrogram:', out_fname
+    image = png.Reader(filename=out_fname).read()
+    pixels = image[2]
+
+    ## Trim to interesting part and transpose to time analysis
+    rows = itertools.islice(pixels, 150, 250)
+    cols = transpose(rows)
+
+    ## Smooth
+    smoothing_fn = lambda window: median([monochrome(r, THRESHOLD) for r in window])
+    data = sliding_window(cols, WINDOW_LENGTH, smoothing_fn)
+    ranges = transition_ranges(data, MIN_ON, MIN_OFF, WINDOW_LENGTH / 2 + 4)
+
+    ## Print plot data to stderr
+    #for x in data: stderr(x)
+
+    ## Print range data to stdout
+    print 'from [hh:mm:ss]\tto [hh:mm:ss]\tlen [hh:mm:ss]\tfrom [s]\tto [s]\tlen [s]'
+    for start, end in ranges:
+        print '%s\t%s\t%s\t%5d\t%5d\t%5d' % (to_time(start), to_time(end), to_time(end - start),
+                                             start, end, end - start)
+
+    ## Clean up
+    if os.path.exists(out_fname):
+        os.remove(out_fname)
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except KeyboardInterrupt:
+        sys.exit(1)
