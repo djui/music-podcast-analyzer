@@ -5,6 +5,28 @@ Finds start and end ranges of music in podcast files (could be any audio files).
 A common use case is enabling to generate chapter markers.
 
 
+### How does it work?
+
+The script works in three steps:
+
+1. Generate a spectrogram (using [Sox](http://sox.sourceforge.net/))
+2. Trim to high frequencies (basically a visual high-pass filter)
+3. Smooth sliding time-window and try to detect energy level changes
+
+
+### Accuracy
+
+Accuracy depends on track types and recording habbits, like time between tracks
+and audio settings, e.g. volume.
+
+
+### Main problems
+
+- If two tracks are close to each other (within 60 seconds) it will be detected as one track.
+- If the tracks are not normalized or just not loud enough, they are not detected
+- Start and end can be off by ~5 seconds due to slow track starts or voice fading
+
+
 ## Usage
 
 ```
@@ -34,3 +56,10 @@ from [hh:mm:ss]      to [hh:mm:ss]  len [hh:mm:ss]  from [s]    to [s]  len [s]
  1:54:08              1:56:59           2:51         6848       7019     171
  2:01:02              2:02:26           1:24         7262       7346      84
  2:11:02              2:13:36           2:34         7862       8016     154
+```
+
+
+### Dependencies
+
+- [Sox](http://sox.sourceforge.net/)
+- [PyPNG](https://pythonhosted.org/pypng/)
